@@ -1,6 +1,7 @@
+
 import { useState, useEffect } from 'react';
 import { StockData } from '../types/stock';
-import { fetchStockData } from '../services/baostockService';
+import { fetchStockData } from '../services/marketService';
 
 export const useStockData = (code: string, name: string) => {
   const [data, setData] = useState<StockData | null>(null);

@@ -1,84 +1,32 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { AnalysisResult } from "../types/analysis";
-import { StockData } from "../types/stock";
+import { StockData, FinancialSnapshot } from "../types/stock";
+import { db, STORES } from '../utils/db';
 
 // --- CACHE CONFIGURATION ---
-const CACHE_KEY_PREFIX = 'gemini_analysis_v2_';
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 Hours
+const CACHE_KEY_PREFIX = 'gemini_analysis_v5_'; 
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 Hours Cache for Analysis
 
 const getCacheKey = (code: string, language: string) => {
-    // Cache by stock code, language and date (daily analysis)
     const today = new Date().toISOString().split('T')[0]; 
     return `${CACHE_KEY_PREFIX}${code}_${language}_${today}`;
 };
 
+// Use IndexedDB instead of LocalStorage
 const getCachedAnalysis = async (code: string, language: string): Promise<AnalysisResult | null> => {
     const key = getCacheKey(code, language);
-
-    // 1. Try Shared Backend Cache (Priority)
-    try {
-        const response = await fetch(`http://localhost:8000/api/cache/get?key=${key}`, {
-             method: 'GET',
-             mode: 'cors'
-        });
-        if (response.ok) {
-            const json = await response.json();
-            if (json.value) {
-                const record = JSON.parse(json.value);
-                if (Date.now() - record.timestamp < CACHE_TTL_MS) {
-                     console.log(`[Gemini] Loaded SHARED cache for ${code} [${language}]`);
-                     return record.data;
-                }
-            }
-        }
-    } catch (e) {
-        // Backend offline or unreachable, ignore
+    const data = await db.get<AnalysisResult>(STORES.ANALYSIS, key);
+    if (data) {
+        console.log(`[Gemini Cache DB] Hit for ${code}`);
+        return data;
     }
-
-    // 2. Try LocalStorage (Fallback)
-    try {
-        const item = localStorage.getItem(key);
-        if (!item) return null;
-
-        const record = JSON.parse(item);
-        if (Date.now() - record.timestamp > CACHE_TTL_MS) {
-            localStorage.removeItem(key);
-            return null;
-        }
-        console.log(`[Gemini] Loaded LOCAL cache for ${code} [${language}]`);
-        return record.data;
-    } catch (e) {
-        return null;
-    }
+    return null;
 };
 
 const saveCachedAnalysis = async (code: string, language: string, data: AnalysisResult) => {
     const key = getCacheKey(code, language);
-    const record = {
-        timestamp: Date.now(),
-        data: data
-    };
-    const jsonStr = JSON.stringify(record);
-
-    // 1. Save to LocalStorage
-    try {
-        localStorage.setItem(key, jsonStr);
-    } catch (e) {
-        console.warn("Failed to save Gemini local cache", e);
-    }
-
-    // 2. Save to Shared Backend Cache
-    try {
-        await fetch('http://localhost:8000/api/cache/set', {
-            method: 'POST',
-            mode: 'cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: key, value: jsonStr })
-        });
-    } catch (e) {
-        // Backend offline, ignore
-    }
+    await db.set(STORES.ANALYSIS, key, data, CACHE_TTL_MS);
 };
 
 
@@ -98,13 +46,13 @@ FOLLOW THIS 5-STAGE ANALYSIS PIPELINE:
    - Output: Score (0-100), Trend Signal, and Key Support/Resistance.
 
 2. FUNDAMENTAL SNAPSHOT (40% Weight)
-   - Valuation: Analyze PE (TTM) and PB ratios relative to general market standards (e.g., A-share avg PE ~15-20).
-   - Market Status: Market Cap size and Dividend Yield.
-   - Note: Detailed financial statements are unavailable in this context, focus on the provided valuation metrics.
+   - Valuation: Analyze PE (TTM) and PB ratios relative to general market standards.
+   - Performance: Analyze ROE (Return on Equity) if provided or derived from PB/PE.
+   - Note: Use the provided "Derived Financials" data for this section.
 
 3. VALUATION PRECISION (25% Weight)
-   - Relative Valuation: Compare PE/PB/PEG against historical avg and industry peers.
-   - Intrinsic Value: Estimate Fair Value based on growth and margins.
+   - Relative Valuation: Compare PE/PB against historical avg and industry peers.
+   - Intrinsic Value: Estimate Fair Value.
 
 4. RISK & CATALYSTS
    - Risks: Regulatory, Macro, or Idiosyncratic.
@@ -134,8 +82,7 @@ const SYSTEM_INSTRUCTION_ZH = `你是一位顶级资产管理公司的首席投�
 
 2. 基本面快照 (权重 40%)
    - 估值分析：基于真实的 PE (TTM) 和 PB 数据进行评估。
-   - 市场地位：结合市值规模和股息率进行分析。
-   - 注意：当前上下文仅提供估值指标，不包含详细财报，请基于现有指标进行专业推断。
+   - 业绩分析：基于提供的 **ROE (净资产收益率)**（如未提供则基于 PB/PE 推算）进行解读。
 
 3. 估值精准测算 (权重 25%)
    - 相对估值：PE/PB 与 A 股平均水平对比。
@@ -160,22 +107,14 @@ export const analyzeStockWithGemini = async (stock: StockData, language: 'en' | 
     return getFallbackAnalysis(stock, language, "No candle data available.");
   }
 
-  // 1. Check Cache (Async)
+  // 1. Check Local Cache (DB Service Layer)
   const cached = await getCachedAnalysis(stock.code, language);
   if (cached) {
       return cached;
   }
 
   const last = stock.candles[stock.candles.length - 1];
-  const financials = stock.financials || { 
-    peTTM: null, 
-    pb: null, 
-    marketCap: null, 
-    dividendYield: null, 
-    circulatingCap: null, 
-    turnoverRate: null, 
-    totalShares: null 
-  };
+  const f: Partial<FinancialSnapshot> = stock.financials || {};
   
   // 2. Construct High-Fidelity Technical Context
   const technicalContext = `
@@ -184,34 +123,34 @@ export const analyzeStockWithGemini = async (stock: StockData, language: 'en' | 
     Price: ${last.close} (Chg: ${last.pctChg?.toFixed(2)}%)
     
     [Moving Averages]
-    MA5: ${last.ma5?.toFixed(2)} | MA20: ${last.ma20?.toFixed(2)} | MA50: ${last.ma50?.toFixed(2)} | MA200: ${last.ma200?.toFixed(2)}
+    MA5: ${last.ma5?.toFixed(2)} | MA20: ${last.ma20?.toFixed(2)} | MA50: ${last.ma50?.toFixed(2)}
     
     [Oscillators]
-    RSI(14): ${last.rsi?.toFixed(2)} (Neutral: 30-70)
+    RSI(14): ${last.rsi?.toFixed(2)}
     MACD: Dif=${last.dif?.toFixed(3)} | Dea=${last.dea?.toFixed(3)} | Hist=${last.macd?.toFixed(3)}
     KDJ: K=${last.k?.toFixed(1)} | D=${last.d?.toFixed(1)} | J=${last.j?.toFixed(1)}
     
     [Volatility]
-    Bollinger: Upper=${last.upper?.toFixed(2)} | Lower=${last.lower?.toFixed(2)} | Width=${((last.upper! - last.lower!) / last.mid! * 100).toFixed(1)}%
+    Bollinger: Upper=${last.upper?.toFixed(2)} | Lower=${last.lower?.toFixed(2)}
     
     [Volume]
-    Vol: ${last.volume} | Turnover: ${last.turnover?.toFixed(2)}%
+    Vol: ${last.volume}
   `;
 
-  // 3. Real Financial Context (No Simulations)
-  const formatVal = (v: number | null, suffix = '') => v ? v.toFixed(2) + suffix : 'N/A';
-  const formatCap = (v: number | null) => v ? (v / 100000000).toFixed(2) + ' Billion CNY' : 'N/A';
+  // 3. Real Financial Context
+  const formatVal = (v: number | null | undefined, suffix = '') => v ? v.toFixed(2) + suffix : 'N/A';
+  const formatCap = (v: number | null | undefined) => v ? (v / 100000000).toFixed(2) + ' Billion CNY' : 'N/A';
 
   const financialContext = `
-    [Real-Time Valuation Metrics]
-    PE Ratio (TTM): ${formatVal(financials.peTTM)}
-    PB Ratio (LF): ${formatVal(financials.pb)}
-    Dividend Yield: ${formatVal(financials.dividendYield, '%')}
+    [Valuation Metrics]
+    PE Ratio (TTM): ${formatVal(f.peTTM)}
+    PB Ratio (LF): ${formatVal(f.pb)}
+    Dividend Yield: ${formatVal(f.dividendYield, '%')}
     
-    [Market Metrics]
-    Total Market Cap: ${formatCap(financials.marketCap)}
-    Circulating Cap: ${formatCap(financials.circulatingCap)}
-    Turnover Rate: ${formatVal(financials.turnoverRate, '%')}
+    [Derived Financials]
+    ROE (Est. via PB/PE): ${formatVal(f.roe, '%')}
+    Market Cap: ${formatCap(f.marketCap)}
+    Circulating Cap: ${formatCap(f.circulatingCap)}
   `;
 
   try {
@@ -230,12 +169,11 @@ export const analyzeStockWithGemini = async (stock: StockData, language: 'en' | 
     console.log("[Gemini] Requesting analysis for", stock.code);
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview', // Upgraded to Pro for logic
+      model: 'gemini-3-pro-preview',
       contents: prompt,
       config: {
         systemInstruction: language === 'zh' ? SYSTEM_INSTRUCTION_ZH : SYSTEM_INSTRUCTION_EN,
         responseMimeType: "application/json",
-        // Detailed Schema to force rich content
         responseSchema: {
           type: Type.OBJECT,
           properties: {
@@ -296,8 +234,6 @@ export const analyzeStockWithGemini = async (stock: StockData, language: 'en' | 
 
     const text = response.text;
     if (!text) throw new Error("Empty response from Gemini");
-    
-    console.log("[Gemini] Raw Response:", text.substring(0, 200) + "...");
 
     let result;
     try {
@@ -306,13 +242,7 @@ export const analyzeStockWithGemini = async (stock: StockData, language: 'en' | 
         throw new Error("Failed to parse Gemini JSON response");
     }
 
-    // --- RELAXED VALIDATION ---
-    // Instead of throwing errors on partially missing fields, we try to use defaults.
-    // Critical fields: recommendation, summary.
-    
-    if (!result.strategy) {
-         throw new Error("Gemini returned invalid structure (missing strategy)");
-    }
+    if (!result.strategy) throw new Error("Invalid structure");
 
     const analysisData: AnalysisResult = {
       stockCode: stock.code,
@@ -320,8 +250,8 @@ export const analyzeStockWithGemini = async (stock: StockData, language: 'en' | 
       strategy: {
          recommendation: result.strategy.recommendation || 'HOLD',
          confidenceScore: result.strategy.confidenceScore ?? 0.5,
-         summary: result.strategy.summary || "Analysis completed but summary missing.",
-         outlook: result.strategy.outlook || 'No outlook provided',
+         summary: result.strategy.summary || "",
+         outlook: result.strategy.outlook || "",
          investmentThesis: result.strategy.investmentThesis || [],
          riskFactors: result.strategy.riskFactors || [],
          catalysts: result.strategy.catalysts || []
@@ -354,71 +284,37 @@ export const analyzeStockWithGemini = async (stock: StockData, language: 'en' | 
       }
     };
 
-    // Save to Cache if valid
-    saveCachedAnalysis(stock.code, language, analysisData);
-
+    // Save async
+    await saveCachedAnalysis(stock.code, language, analysisData);
     return analysisData;
 
   } catch (error: any) {
     console.warn("Gemini Analysis Failed:", error);
-    // Determine user-friendly error message
     let errorMsg = language === 'zh' ? "AI 服务暂时不可用" : "AI Service Temporarily Unavailable";
     
     if (error.message?.includes("API_KEY")) {
         errorMsg = language === 'zh' ? "未配置 API Key" : "Missing API Configuration";
-    } else if (error.message?.includes("fetch failed") || error.message?.includes("Network")) {
-        errorMsg = language === 'zh' ? "网络连接失败，请检查网络设置" : "Network Error - Please check connection";
-    } else if (error.status === 503) {
-        errorMsg = language === 'zh' ? "服务过载 (503)，请稍后重试" : "Service Overloaded (503) - Try again later";
-    } else if (error.status === 400 || error.message?.includes("incomplete") || error.message?.includes("invalid structure")) {
-        errorMsg = language === 'zh' ? "AI 返回数据不完整，请重试" : "Incomplete AI Response - Please try again";
     }
-
     return getFallbackAnalysis(stock, language, errorMsg);
   }
 };
 
 const getFallbackAnalysis = (stock: StockData, language: 'en' | 'zh', errorMessage: string): AnalysisResult => {
-    // Explicit Error State: Confidence = -1
-    // This tells the UI to render an ERROR CARD instead of a normal report.
-    
     return {
         stockCode: stock.code,
         timestamp: new Date().toISOString(),
         strategy: {
             recommendation: 'HOLD',
-            confidenceScore: -1, // SENTINEL VALUE FOR ERROR UI
-            summary: errorMessage, // Display the specific error
+            confidenceScore: -1,
+            summary: errorMessage,
             outlook: "Error",
             investmentThesis: [],
             riskFactors: [],
             catalysts: []
         },
-        technical: {
-            score: 0,
-            trend: 'Neutral',
-            summary: '',
-            signals: [],
-            support: 0,
-            resistance: 0
-        },
-        fundamental: {
-            score: 0,
-            roeAssessment: '',
-            dupontAnalysis: '',
-            financialHealth: 'Stable',
-            highlights: []
-        },
-        valuation: {
-            score: 0,
-            status: 'Fair',
-            fairValue: 0,
-            rationale: ''
-        },
-        risk: {
-            score: 0,
-            level: 'Low',
-            warnings: []
-        }
+        technical: { score: 0, trend: 'Neutral', summary: '', signals: [], support: 0, resistance: 0 },
+        fundamental: { score: 0, roeAssessment: '', dupontAnalysis: '', financialHealth: 'Stable', highlights: [] },
+        valuation: { score: 0, status: 'Fair', fairValue: 0, rationale: '' },
+        risk: { score: 0, level: 'Low', warnings: [] }
     };
 };

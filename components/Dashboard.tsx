@@ -74,7 +74,8 @@ const Dashboard: React.FC = () => {
                     <MetricsPanel analysis={analysis} loading={analyzing || !analysis} />
                 </div>
                 <div className="h-[200px]">
-                    <DuPontAnalysis analysis={analysis} />
+                    {/* Pass stockData for real financials */}
+                    <DuPontAnalysis analysis={analysis} stockData={stockData} />
                 </div>
             </div>
 

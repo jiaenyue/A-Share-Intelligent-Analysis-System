@@ -15,6 +15,14 @@ export interface FinancialSnapshot {
   circulatingCap: number | null;
   turnoverRate: number | null; // Daily turnover
   totalShares: number | null;
+  // Deep Financials (Baostock/F10 Style)
+  roe?: number | null;        // Return on Equity
+  netMargin?: number | null;  // Net Profit Margin
+  grossMargin?: number | null;// Gross Margin
+  debtRatio?: number | null;  // Debt to Asset Ratio
+  assetTurnover?: number | null; // Asset Turnover Ratio
+  equityMultiplier?: number | null; // Equity Multiplier
+  reportDate?: string | null; // Date of the financial report
 }
 
 export interface Candle {
