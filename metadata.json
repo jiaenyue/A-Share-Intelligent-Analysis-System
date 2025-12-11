@@ -1,0 +1,5 @@
+{
+  "name": "A-Share Intelligent Analysis System",
+  "description": "Institutional-grade Chinese stock analysis platform combining technical indicators, fundamental data, and Gemini 3 Pro AI insights.",
+  "requestFramePermissions": []
+}
