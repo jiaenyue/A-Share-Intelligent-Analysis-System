@@ -78,21 +78,25 @@ const jsonpFetch = (url: string, callbackName: string): Promise<any> => {
     });
 };
 
-// --- STRATEGY 1: PYTHON PROXY (BAOSTOCK) ---
-// Tries to connect to local python backend
-const fetchKLinesPythonProxy = async (code: string): Promise<{ candles: Candle[], financials: FinancialSnapshot | null }> => {
+// --- STRATEGY 1: NODEJS BACKEND PROXY ---
+const fetchKLinesBackendProxy = async (code: string): Promise<{ candles: Candle[], financials: FinancialSnapshot | null }> => {
     try {
+        // Skip proxy if we are on HTTPS but backend is HTTP localhost (Mixed Content)
+        // This prevents "Script error" or "NetworkError" in secure previews
+        if (typeof window !== 'undefined' && window.location.protocol === 'https:' && !window.location.hostname.includes('localhost')) {
+            throw new Error("Skipping local backend in HTTPS environment");
+        }
+
         // Assume backend is running on localhost:8000
         const response = await fetch(`http://localhost:8000/api/kline?code=${code}`, {
             method: 'GET',
-            // Important: Standard cors mode required for localhost communication
             mode: 'cors' 
         });
         
         if (!response.ok) throw new Error(`Backend returned ${response.status}`);
         const json = await response.json();
         
-        if (!json.data || json.data.length === 0) throw new Error("Baostock empty data");
+        if (!json.data || json.data.length === 0) throw new Error("Backend empty data");
 
         const candles: Candle[] = json.data.map((item: any) => ({
             date: item.date,
@@ -107,17 +111,31 @@ const fetchKLinesPythonProxy = async (code: string): Promise<{ candles: Candle[]
             pbMRQ: item.pbMRQ
         }));
 
-        // Extract latest valid financials from the last candle
-        const last = json.data[json.data.length - 1];
-        const financials: FinancialSnapshot = {
-            peTTM: last.peTTM || null,
-            pb: last.pbMRQ || null,
-            dividendYield: null, 
-            marketCap: null,
-            circulatingCap: null,
-            turnoverRate: null,
-            totalShares: null
-        };
+        // Try to get explicit financials from backend first, fallback to last candle
+        let financials: FinancialSnapshot | null = null;
+        
+        if (json.financials) {
+             financials = {
+                peTTM: json.financials.peTTM,
+                pb: json.financials.pbMRQ, // Map pbMRQ to pb
+                dividendYield: null,
+                marketCap: json.financials.marketCap,
+                circulatingCap: null,
+                turnoverRate: null,
+                totalShares: null
+             };
+        } else {
+            const last = json.data[json.data.length - 1];
+            financials = {
+                peTTM: last.peTTM || null,
+                pb: last.pbMRQ || null,
+                dividendYield: null, 
+                marketCap: null,
+                circulatingCap: null,
+                turnoverRate: null,
+                totalShares: null
+            };
+        }
 
         return { candles, financials };
 
@@ -129,7 +147,7 @@ const fetchKLinesPythonProxy = async (code: string): Promise<{ candles: Candle[]
 // --- STRATEGY 2: TENCENT JSONP ---
 const fetchKLinesTencent = async (symbol: string, callbackPrefix: string): Promise<Candle[]> => {
     const cb = `cb_qq_k_${callbackPrefix}`;
-    // Using web.ifzq.gtimg.cn (Standard K-Line API)
+    // Using web.ifzq.gtimg.cn (Standard K-Line API) - HTTPS
     const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${symbol},day,,,320,qfq&cb=${cb}`;
     const json = await jsonpFetch(url, cb);
     
@@ -157,10 +175,10 @@ const fetchKLinesTencent = async (symbol: string, callbackPrefix: string): Promi
 const fetchKLinesEastMoney = async (secid: string, callbackPrefix: string): Promise<Candle[]> => {
     const cb = `cb_em_k_${callbackPrefix}`;
     
-    // Mirror 1: push2his (Historical)
+    // Mirror 1: push2his (Historical) - HTTPS
     const urlHis = `https://push2his.eastmoney.com/api/qt/stock/kline/get?fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f61&klt=101&fqt=1&secid=${secid}&beg=0&end=20500101&lmt=320&cb=${cb}`;
     
-    // Mirror 2: push2 (Realtime/Recent)
+    // Mirror 2: push2 (Realtime/Recent) - HTTPS
     const urlRt = `https://push2.eastmoney.com/api/qt/stock/kline/get?fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f61&klt=101&fqt=1&secid=${secid}&beg=0&end=20500101&lmt=320&cb=${cb}`;
 
     try {
@@ -200,7 +218,7 @@ const tryFetchEastMoney = async (url: string, cb: string): Promise<Candle[] | nu
 const fetchSnapshotTencent = (symbol: string): Promise<FinancialSnapshot> => {
     return new Promise((resolve) => {
         const varName = `v_${symbol}`;
-        // Using qt.gtimg.cn (Snapshot API)
+        // Using qt.gtimg.cn (Snapshot API) - HTTPS
         const url = `https://qt.gtimg.cn/q=${symbol}`;
         const script = document.createElement('script');
         script.src = url;
@@ -244,10 +262,10 @@ export const fetchStockData = async (code: string, name: string): Promise<StockD
   let candles: Candle[] = [];
   let financials: FinancialSnapshot = { peTTM: null, pb: null, dividendYield: null, marketCap: null, circulatingCap: null, turnoverRate: null, totalShares: null };
 
-  // --- 1. TRY PYTHON BACKEND PROXY (Primary) ---
+  // --- 1. TRY NODEJS BACKEND PROXY (Primary) ---
   try {
       const proxyResult = await Promise.race([
-          fetchKLinesPythonProxy(code),
+          fetchKLinesBackendProxy(code),
           // Short timeout to quickly failover if backend not running
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Proxy Connection Timeout")), 1500))
       ]);
@@ -256,8 +274,9 @@ export const fetchStockData = async (code: string, name: string): Promise<StockD
       if (proxyResult.financials) {
           financials = { ...financials, ...proxyResult.financials };
       }
-      console.log("SUCCESS: Loaded data from Python Baostock Backend");
+      console.log("SUCCESS: Loaded data from Node.js Backend");
   } catch (proxyError) {
+      // Silently failover to JSONP
       
       // --- 2. FALLBACK TO JSONP SOURCES ---
       try {
@@ -275,6 +294,7 @@ export const fetchStockData = async (code: string, name: string): Promise<StockD
 
       } catch (liveError) {
           console.error("All live data sources failed.", liveError);
+          // Return user-friendly error
           throw new Error("Unable to retrieve real market data. Please check network connection.");
       }
   }
