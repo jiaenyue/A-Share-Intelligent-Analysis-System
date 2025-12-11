@@ -52,7 +52,11 @@ const Dashboard: React.FC = () => {
                         <span className="text-gray-400">{t('loadingData')}</span>
                     </div>
                 ) : (
-                    <KLineChart data={stockData.candles} />
+                    <KLineChart 
+                        data={stockData.candles} 
+                        stockName={stockData.name}
+                        stockCode={stockData.code}
+                    />
                 )}
                 </div>
                 

@@ -6,11 +6,13 @@ import { useLanguage } from '../contexts/LanguageContext';
 
 interface KLineChartProps {
   data: Candle[];
+  stockName?: string;
+  stockCode?: string;
 }
 
 type OverlayType = 'MA' | 'BOLL' | 'NONE';
 
-const KLineChart: React.FC<KLineChartProps> = ({ data }) => {
+const KLineChart: React.FC<KLineChartProps> = ({ data, stockName, stockCode }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartInstanceRef = useRef<echarts.ECharts | null>(null);
   const { t, colors, language } = useLanguage();
@@ -281,7 +283,14 @@ const KLineChart: React.FC<KLineChartProps> = ({ data }) => {
     <div className="h-full w-full bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 flex flex-col">
        <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-800/50 rounded-t-xl">
         <div className="flex items-center gap-4">
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200">{t('priceAction')}</h3>
+            <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-2">
+                <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200">{t('priceAction')}</h3>
+                {stockName && (
+                     <span className="text-sm font-bold text-primary-light dark:text-primary-dark">
+                        {stockName} <span className="text-xs font-normal text-gray-500 dark:text-gray-400">({stockCode})</span>
+                     </span>
+                 )}
+            </div>
             
             {/* Overlay Toggles */}
             <div className="flex bg-gray-200 dark:bg-gray-700 rounded-lg p-0.5">
