@@ -45,10 +45,10 @@ export const useChat = (currentStock: StockData | null) => {
     }
   }, [language]);
 
+  // Re-initialize session whenever initSession changes (which happens when language changes)
   useEffect(() => {
-    if (!chatSessionRef.current) {
-      initSession();
-    }
+    chatSessionRef.current = null; // Force reset
+    initSession();
   }, [initSession]);
 
   // Helper to convert base64 to Part
@@ -86,15 +86,20 @@ export const useChat = (currentStock: StockData | null) => {
 
     try {
       // 2. Prepare Context (if stock changed or for every message to be safe)
-      // We prepend context about the current stock if it exists
       let promptText = text;
+      
+      // Enforce language in prompt to ensure model switches context immediately even if history was in another language
+      const langDirective = language === 'zh' ? "\n(请用中文回答)" : "\n(Please answer in English)";
+      
       if (currentStock) {
          const context = `
 [Context: User is viewing ${currentStock.name} (${currentStock.code})]
 Price: ${currentStock.candles[currentStock.candles.length-1].close}
 MA Trend: ${currentStock.candles[currentStock.candles.length-1].ma20 ? 'Available' : 'Calculating'}
 `;
-         promptText = `${context}\n\nUser Question: ${text}`;
+         promptText = `${context}\n\nUser Question: ${text}${langDirective}`;
+      } else {
+         promptText = `${text}${langDirective}`;
       }
 
       // 3. Create Placeholder for Stream
@@ -108,32 +113,12 @@ MA Trend: ${currentStock.candles[currentStock.candles.length-1].ma20 ? 'Availabl
       }]);
 
       // 4. Stream Response
-      const result = await chatSessionRef.current.sendMessageStream({
-         content: createParts(promptText, images) // Use 'content', not 'contents' or 'message' for proper typing in some versions, but guidelines say sendMessageStream({ message: ... }) or just passed params.
-         // Guidelines check: "chat.sendMessageStream({ message: ... })"
-         // Adjusting to guidelines:
-      } as any); // Type assertion to bypass potential version mismatch in types vs runtime
-
-      // Correct usage per guidelines for @google/genai might be slightly different than older SDKs
-      // The guidelines say: await chat.sendMessageStream({ message: "..." });
-      // But for multimodal, we need parts. 
-      // Let's try passing the object structure expected by the underlying API.
-      
-      // Re-reading guidelines: `chat.sendMessageStream` only accepts the `message` parameter.
-      // Wait, `message` can be string OR Part[]. 
-      // Let's construct the payload correctly.
-      
       const messagePayload = createParts(promptText, images);
 
+      // Pass payload as 'message', not 'parts' or 'content'
       const stream = await chatSessionRef.current.sendMessageStream({ 
-          parts: messagePayload 
-      } as any); 
-      // Note: The prompt guidelines show `sendMessageStream({ message: "string" })`. 
-      // For multimodal, typically `message` can be an array of parts in standard Google SDKs.
-      // If the specific SDK strictly enforces string for `message`, we might need `generateContentStream` for multimodal 
-      // but that loses chat history.
-      // However, `chats.create` usually supports multimodal in history. 
-      // We will assume `parts` or `message` accepting parts works.
+          message: messagePayload 
+      } as any);
 
       let fullText = '';
       
@@ -171,6 +156,7 @@ MA Trend: ${currentStock.candles[currentStock.candles.length-1].ma20 ? 'Availabl
 
   const clearHistory = () => {
     setMessages([]);
+    chatSessionRef.current = null;
     initSession(); // Re-init to clear backend history context
   };
 
