@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { useChat } from '../hooks/useChat';
 import { StockData } from '../types/stock';
@@ -50,41 +49,132 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({ currentStock }) => {
     }
   };
 
-  // Simple Markdown Parser (Bold, Code, List)
-  const renderMarkdown = (text: string) => {
-    const lines = text.split('\n');
-    return lines.map((line, idx) => {
-      // Code Block
-      if (line.startsWith('```')) return <div key={idx} className="my-2 border-t border-gray-600"></div>;
-      
-      // Bullet
-      if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
-        return (
-          <div key={idx} className="flex gap-2 ml-2 my-1">
-             <span className="text-primary-light">•</span>
-             <span dangerouslySetInnerHTML={{__html: formatInline(line.substring(2))}} />
-          </div>
-        );
-      }
-      
-      // Header
-      if (line.startsWith('## ')) {
-          return <h4 key={idx} className="font-bold text-base mt-3 mb-1 text-primary-light dark:text-primary-dark">{formatInline(line.replace('## ', ''))}</h4>
-      }
+  // --- Advanced Markdown Parser ---
+  const formatInline = (text: string) => {
+    // 0. Pre-process: Handle AI potentially returning HTML tags instead of Markdown
+    // We convert common HTML tags to Markdown before escaping to ensure they render correctly
+    let processed = text
+        .replace(/<strong>(.*?)<\/strong>/g, '**$1**')
+        .replace(/<b>(.*?)<\/b>/g, '**$1**')
+        .replace(/<em>(.*?)<\/em>/g, '*$1*')
+        .replace(/<i>(.*?)<\/i>/g, '*$1*');
 
-      // Paragraph
-      if (line.trim() === '') return <br key={idx} />;
-      
-      return <p key={idx} className="leading-relaxed whitespace-pre-wrap" dangerouslySetInnerHTML={{__html: formatInline(line)}} />;
-    });
+    // 1. Escape HTML first to prevent broken layout from symbols like < or >
+    let formatted = processed
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+
+    // 2. Bold **text**
+    formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    
+    // 3. Italic *text*
+    formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    
+    // 4. Inline Code `text`
+    formatted = formatted.replace(/`([^`]+)`/g, '<code class="bg-gray-200 dark:bg-gray-600 px-1.5 py-0.5 rounded font-mono text-xs text-red-500 dark:text-red-300">$1</code>');
+    
+    return formatted;
   };
 
-  const formatInline = (text: string) => {
-    // Bold **text**
-    let formatted = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-    // Code `text`
-    formatted = formatted.replace(/`(.*?)`/g, '<code class="bg-gray-200 dark:bg-gray-700 px-1 rounded font-mono text-sm">$1</code>');
-    return formatted;
+  const renderMarkdown = (text: string) => {
+    const lines = text.split('\n');
+    const elements: React.ReactNode[] = [];
+    
+    let inCodeBlock = false;
+    let codeBuffer: string[] = [];
+
+    lines.forEach((line, idx) => {
+        const trimmed = line.trim();
+
+        // --- Code Block Handling ---
+        if (trimmed.startsWith('```')) {
+            if (inCodeBlock) {
+                // End of code block
+                elements.push(
+                    <div key={`code-${idx}`} className="bg-gray-800 text-gray-200 p-3 rounded-lg my-2 overflow-x-auto font-mono text-xs">
+                        <pre>{codeBuffer.join('\n')}</pre>
+                    </div>
+                );
+                codeBuffer = [];
+                inCodeBlock = false;
+            } else {
+                // Start of code block
+                inCodeBlock = true;
+            }
+            return;
+        }
+
+        if (inCodeBlock) {
+            codeBuffer.push(line);
+            return;
+        }
+
+        // --- Regular Content Parsing ---
+
+        // 1. Headers
+        if (line.startsWith('### ')) {
+            elements.push(<h4 key={idx} className="font-bold text-sm mt-3 mb-1 text-gray-800 dark:text-gray-100">{formatInline(line.substring(4))}</h4>);
+            return;
+        }
+        if (line.startsWith('## ')) {
+            elements.push(<h3 key={idx} className="font-bold text-base mt-4 mb-2 text-primary-light dark:text-primary-dark">{formatInline(line.substring(3))}</h3>);
+            return;
+        }
+
+        // 2. Unordered Lists (- or *)
+        if (trimmed.match(/^[-*]\s/)) {
+            elements.push(
+                <div key={idx} className="flex gap-2 ml-1 my-1">
+                    <span className="text-primary-light font-bold mt-1.5">•</span>
+                    <span className="flex-1 leading-relaxed" dangerouslySetInnerHTML={{__html: formatInline(trimmed.substring(2))}} />
+                </div>
+            );
+            return;
+        }
+
+        // 3. Ordered Lists (1. )
+        const orderedMatch = trimmed.match(/^(\d+)\.\s/);
+        if (orderedMatch) {
+             const num = orderedMatch[1];
+             const content = trimmed.replace(/^(\d+)\.\s/, '');
+             elements.push(
+                <div key={idx} className="flex gap-2 ml-1 my-1">
+                    <span className="text-primary-light font-mono font-bold mt-0.5">{num}.</span>
+                    <span className="flex-1 leading-relaxed" dangerouslySetInnerHTML={{__html: formatInline(content)}} />
+                </div>
+            );
+            return;
+        }
+
+        // 4. Horizontal Rule
+        if (trimmed === '---' || trimmed === '***') {
+            elements.push(<hr key={idx} className="my-3 border-gray-200 dark:border-gray-600" />);
+            return;
+        }
+
+        // 5. Empty Lines (Spacing)
+        if (trimmed === '') {
+            elements.push(<div key={idx} className="h-2" />);
+            return;
+        }
+
+        // 6. Paragraphs
+        elements.push(
+            <p key={idx} className="leading-relaxed mb-1" dangerouslySetInnerHTML={{__html: formatInline(line)}} />
+        );
+    });
+
+    // Handle unclosed code block (e.g., during streaming)
+    if (inCodeBlock && codeBuffer.length > 0) {
+         elements.push(
+            <div key="code-incomplete" className="bg-gray-800 text-gray-200 p-3 rounded-lg my-2 overflow-x-auto font-mono text-xs opacity-80">
+                <pre>{codeBuffer.join('\n')}</pre>
+            </div>
+        );
+    }
+
+    return elements;
   };
 
   const suggestions = [
@@ -169,7 +259,7 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({ currentStock }) => {
                                 <img src={msg.images[0]} alt="Upload" className="max-w-full rounded-lg max-h-32 object-cover" />
                             </div>
                         )}
-                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                        <div className="text-sm">
                             {renderMarkdown(msg.content)}
                         </div>
                     </div>
