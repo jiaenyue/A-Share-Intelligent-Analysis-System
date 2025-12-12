@@ -52,12 +52,13 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({ currentStock }) => {
   // --- Advanced Markdown Parser ---
   const formatInline = (text: string) => {
     // 0. Pre-process: Handle AI potentially returning HTML tags instead of Markdown
-    // We convert common HTML tags to Markdown before escaping to ensure they render correctly
+    // We convert common HTML tags to Markdown before escaping to ensure they render correctly.
+    // Using robust regex to handle attributes, case insensitivity, and spacing.
     let processed = text
-        .replace(/<strong>(.*?)<\/strong>/g, '**$1**')
-        .replace(/<b>(.*?)<\/b>/g, '**$1**')
-        .replace(/<em>(.*?)<\/em>/g, '*$1*')
-        .replace(/<i>(.*?)<\/i>/g, '*$1*');
+        .replace(/<\s*strong\b[^>]*>(.*?)<\s*\/\s*strong\s*>/gi, '**$1**')
+        .replace(/<\s*b\b[^>]*>(.*?)<\s*\/\s*b\s*>/gi, '**$1**')
+        .replace(/<\s*em\b[^>]*>(.*?)<\s*\/\s*em\s*>/gi, '*$1*')
+        .replace(/<\s*i\b[^>]*>(.*?)<\s*\/\s*i\s*>/gi, '*$1*');
 
     // 1. Escape HTML first to prevent broken layout from symbols like < or >
     let formatted = processed
@@ -112,13 +113,17 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({ currentStock }) => {
 
         // --- Regular Content Parsing ---
 
-        // 1. Headers
+        // 1. Headers (Corrected to use dangerouslySetInnerHTML)
         if (line.startsWith('### ')) {
-            elements.push(<h4 key={idx} className="font-bold text-sm mt-3 mb-1 text-gray-800 dark:text-gray-100">{formatInline(line.substring(4))}</h4>);
+            elements.push(
+                <h4 key={idx} className="font-bold text-sm mt-3 mb-1 text-gray-800 dark:text-gray-100" dangerouslySetInnerHTML={{__html: formatInline(line.substring(4))}} />
+            );
             return;
         }
         if (line.startsWith('## ')) {
-            elements.push(<h3 key={idx} className="font-bold text-base mt-4 mb-2 text-primary-light dark:text-primary-dark">{formatInline(line.substring(3))}</h3>);
+            elements.push(
+                <h3 key={idx} className="font-bold text-base mt-4 mb-2 text-primary-light dark:text-primary-dark" dangerouslySetInnerHTML={{__html: formatInline(line.substring(3))}} />
+            );
             return;
         }
 

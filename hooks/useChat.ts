@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, Chat, Content } from "@google/genai";
 import { ChatMessage } from '../types/chat';
@@ -9,7 +8,7 @@ const SYSTEM_INSTRUCTION_EN = `You are an expert AI Financial Advisor for the A-
 Your goal is to provide professional, data-driven, and risk-aware investment guidance.
 You have access to technical indicators, valuation metrics, and market trends provided in the context.
 - Be concise and direct.
-- Use Markdown for formatting (bold, lists). Do not use HTML tags.
+- STRICTLY use Markdown for formatting (bold, lists). DO NOT use HTML tags like <strong>, <b>, etc.
 - If the user asks about the current stock, use the provided context.
 - DISCLAIMER: Always remind the user that this is for informational purposes only, not financial advice.`;
 
@@ -17,7 +16,7 @@ const SYSTEM_INSTRUCTION_ZH = `你是一位精通 A 股市场的 AI 智能投资
 你的目标是提供专业、数据驱动且关注风险的投资指导。
 你可以利用上下文中的技术指标、估值数据和市场趋势进行分析。
 - 回答要简洁、直接。
-- 使用 Markdown 格式（加粗、列表等）优化排版。不要使用 HTML 标签。
+- 严禁使用 HTML 标签（如 <strong>, <b>）。必须使用 Markdown 格式（如 **加粗**）。
 - 当用户询问当前股票时，请基于提供的上下文数据回答。
 - 免责声明：始终提醒用户以上信息仅供参考，不构成投资建议。`;
 
